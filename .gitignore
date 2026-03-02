@@ -1,0 +1,8 @@
+*.csv
+*.dmp
+data
+prem
+snapshot
+config
+marketmaking
+__pycache__

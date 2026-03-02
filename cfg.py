@@ -1,0 +1,6 @@
+start_date = '20260302'
+config_dir = 'config/'
+config_path = 'config/name_li.xlsx'
+snapshot_dir = 'snapshot/'
+prem_dir = 'prem/'
+result_path = 'batch_single_stock_optimal_summary.csv'
