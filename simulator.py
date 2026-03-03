@@ -301,7 +301,6 @@ def plot_trades_with_premium(df, trade_records, file_name, strategy, save_path=N
         # 保存图片
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"交易图已保存到: {save_path}")
 
     except Exception as e:
         print(f"绘制交易图时出错: {e}")
