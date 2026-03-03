@@ -24,7 +24,7 @@ def calcute_prem(prem,base_prem,sigma_prem,max_inv,k):
     """使用跳界函数"""
     u = base_prem
     sigma = sigma_prem
-    prem_bid=u+k*sigma
+    prem_bid = np.maximum(u + k * sigma,22.5)
     prem_ask=u-k*sigma
     return prem_ask,prem_bid
     
@@ -74,7 +74,14 @@ def run_advanced_backtest(df, strategy='jump', k=3,timing_interval=600,date=None
             #更新S_sellable
             if df.loc[i, 'dint'] != df.loc[i-1, 'dint']:
                 # 新的一天开始时，S_sellable设置为前一天最后的S值
-                df.loc[i,'S_sellable']=df.loc[i-1,'S']
+                if (df.loc[i-1,'prem_B'] < -10) and (df.loc[i-1,'C'] == 0) and(df.loc[i-1,'S_sellable'] >0): # 收盘转股套利
+                    df.loc[i-1,'cash'] += (-df.loc[i-1,'prem_B']-5.854)/10000 * df.loc[i-1,'C']*df.loc[i-1,'bidPrice5']# 尾盘卖股买债转股
+                if (df.loc[i-1,'prem_B'] < 0) and (df.loc[i-1,'C'] > 0): # 转股逻辑
+                    df.loc[i-1, 'S'] = 100
+                    df.loc[i-1,'S_sellable']=100
+                    df.loc[i-1,'C'] =0
+                df.loc[i, 'S_sellable'] = df.loc[i - 1, 'S']
+
             else:
                 # 同一天内，S_sellable保持不变
                 # 注意：执行卖股买债后，S_sellable被设置为0；执行卖债买股后，S_sellable保持为0
@@ -85,10 +92,11 @@ def run_advanced_backtest(df, strategy='jump', k=3,timing_interval=600,date=None
             df.loc[i,'C'] = df.loc[i-1, 'C']
 
             #执行卖股买债
-            if (df.loc[i,'S_sellable']>0)&(max(df.loc[i,'prem_B'],df.loc[i-1,'prem_B'])<df.loc[i,'prem_ask']):
-                sell_volume=df.loc[i,'S_sellable']*df.loc[i,'stock_price']
-                buy_volume=df.loc[i,'dollar_volume']
-                trade_cost=sell_volume*5.854 / 10000+buy_volume*0.4 / 10000
+            if (df.loc[i,'S_sellable']>0) & (df.loc[i,'prem_B'] < df.loc[i,'prem_ask']):
+                sell_volume=df.loc[i,'S_sellable'] * df.loc[i,'stock_price']
+                #buy_volume=df.loc[i,'dollar_volume']
+                buy_volume = df.loc[i, 'S'] * df.loc[i, 'stock_price'] / (1 - df.loc[i, 'prem_ask'] / 10000)
+                trade_cost=sell_volume*5.854 / 10000+buy_volume*0.5 / 10000
                 df.loc[i,'S']=0
                 df.loc[i,'C']=buy_volume/df.loc[i,'askPrice5']
                 df.loc[i,'cash']=df.loc[i,'cash']+sell_volume-buy_volume-trade_cost
@@ -111,10 +119,10 @@ def run_advanced_backtest(df, strategy='jump', k=3,timing_interval=600,date=None
                 continue
                 
             #执行卖债买股
-            elif (df.loc[i,'S_sellable']==0)&(df.loc[i,'S']==0)&(min(df.loc[i,'prem_A'],df.loc[i-1,'prem_A'])>df.loc[i,'prem_bid']):
+            elif (df.loc[i,'S_sellable']==0)&(df.loc[i,'S']==0)&(df.loc[i,'prem_A']>df.loc[i,'prem_bid']):
                 sell_volume=df.loc[i,'C']*df.loc[i,'bidPrice5']
-                buy_volume=df.loc[i,'dollar_volume']
-                trade_cost=sell_volume*0.4 / 10000+buy_volume*0.854 / 10000
+                buy_volume=df.loc[i,'stock_price'] * 100
+                trade_cost=sell_volume*0.5 / 10000+buy_volume*0.854 / 10000
                 df.loc[i,'S']=buy_volume/df.loc[i,'stock_price']
                 df.loc[i,'C']=0
                 df.loc[i,'cash']=df.loc[i,'cash']+sell_volume-buy_volume-trade_cost
@@ -139,9 +147,9 @@ def run_advanced_backtest(df, strategy='jump', k=3,timing_interval=600,date=None
             else:
                 continue
         
-        df['total_cash']=df['cash']+df['S']*df['stock_price']+df['C']*df['bidPrice5']-df['dollar_volume']
+        df['total_cash']=df['cash']+df['S']*df['stock_price']+df['C']*df['bidPrice5']-df['stock_price']*100 # 超额收益
         # 计算最终收益率
-        final_return = (df['total_cash'].values[-1] / df['dollar_volume'].values[0])*100
+        final_return = (df['total_cash'].values[-1] / (df['stock_price'].values[0]*100))*100
         # 计算回测天数
         days = df['dint'].unique().size
         # 计算年化收益率
@@ -170,8 +178,6 @@ def run_advanced_backtest(df, strategy='jump', k=3,timing_interval=600,date=None
         save_path = rf'{save_dir}/{code_name}.csv'
         df.to_csv(save_path, index=False, encoding='utf-8-sig')
         
-        print(f"  数据已保存到: {save_path}")
-        
         return {
             'final_return_pct': annual_return_pct,
             'total_profit': total_profit,
@@ -190,6 +196,8 @@ def run_advanced_backtest(df, strategy='jump', k=3,timing_interval=600,date=None
         
     except Exception as e:
         print(f"回测过程中出错: {e}")
+        import traceback
+        traceback.print_exc()
         return {'error': str(e)}
 
 def plot_trades_with_premium(df, trade_records, file_name, strategy, save_path=None):
@@ -314,8 +322,6 @@ def process_single_file(file_path, strategy='jump', k=3, plot_trades=True,timing
     try:
         # 获取文件名
         file_name = os.path.basename(file_path).replace('.csv', '')
-        print(f"正在处理: {file_name}")
-        
         # 读取数据
         df = pd.read_csv(file_path)
         
@@ -390,8 +396,7 @@ def process_single_file(file_path, strategy='jump', k=3, plot_trades=True,timing
                 save_path=plot_path
             )
         
-        print(f"完成: {file_name}, 收益率: {result['final_return_pct']:.2f}%, 交易次数: {result['trade_count']}")
-                # 实时写入Excel
+        # 实时写入Excel
         csv_file = r'marketmaking/premium/stocks_backtest_results.xlsx'
         if not os.path.exists("marketmaking/premium"):
             os.makedirs("marketmaking/premium")
@@ -772,8 +777,6 @@ def single_stock_parameter_search_args(args):
         包含所有参数组合结果和最优参数的字典
     """
     file_path, k_list, timing_interval_list, strategy, plot_trades, save_results, parallel, max_workers = args
-    print(f"\n开始对单个股票进行参数搜索: {os.path.basename(file_path)}")
-    print("="*80)
     
     all_results = []
     best_result = None
@@ -788,7 +791,6 @@ def single_stock_parameter_search_args(args):
     current_combination = 0
     for k, timing_interval in param_combinations:
         current_combination += 1
-        print(f"\n[{current_combination}/{total_combinations}] 测试参数: k={k}, timing_interval={timing_interval}")
         
         # 运行单个文件的回测
         result = process_single_file(
@@ -802,7 +804,7 @@ def single_stock_parameter_search_args(args):
         
         # 检查是否有错误
         if 'error' in result:
-            print(f"  错误: {result['error']}")
+            print(f"  {file_path} k={k} timing_interval={timing_interval} 错误: {result['error']}")
             all_results.append({
                 'k': k,
                 'timing_interval': timing_interval,
@@ -819,8 +821,6 @@ def single_stock_parameter_search_args(args):
         trade_count = result.get('trade_count', 0)
         max_drawdown = result.get('max_drawdown', np.nan)
         prem_edge = result.get('prem_edge', np.nan)
-        
-        print(f"  收益率: {return_pct:.2f}%, 交易次数: {trade_count}, 最大回撤: {max_drawdown:.2f}")
         
         # 保存结果
         param_result = {
@@ -849,16 +849,8 @@ def single_stock_parameter_search_args(args):
             }
     
     # 打印最优参数
-    print("\n" + "="*80)
-    print("参数搜索完成！")
-    print("="*80)
-    if best_result:
-        print(f"最优参数组合:")
-        print(f"  k: {best_result['k']}")
-        print(f"  timing_interval: {best_result['timing_interval']}")
-        print(f"  收益率: {best_result['param_result']['final_return_pct']:.2f}%")
-        print(f"  交易次数: {best_result['param_result']['trade_count']}")
-        print(f"  最大回撤: {best_result['param_result']['max_drawdown']:.2f}")
+    if best_result:        
+        print(f"{file_path} 最优参数组合: k={best_result['k']} timing_interval={best_result['timing_interval']} 收益率={best_result['param_result']['final_return_pct']:.2f}% 交易次数={best_result['param_result']['trade_count']} 最大回撤: {best_result['param_result']['max_drawdown']:.2f}")
         
         # 对最优参数绘制交易图
         if plot_trades and best_result['result'].get('trade_records'):
@@ -885,7 +877,6 @@ def single_stock_parameter_search_args(args):
         if not os.path.exists("search"):
             os.makedirs("search")
         results_df.to_csv(save_path, index=False, encoding='utf-8-sig')
-        print(f"\n所有参数组合结果已保存到: {save_path}")
         
         # 保存最优参数摘要
         if best_result:
@@ -905,7 +896,6 @@ def single_stock_parameter_search_args(args):
                 os.makedirs(base_path)
             summary_path = os.path.join(base_path, f'single_stock_optimal_{file_name}.csv')
             summary_df.to_csv(summary_path, index=False, encoding='utf-8-sig')
-            print(f"最优参数摘要已保存到: {summary_path}")
     
     return {
         'all_results': all_results,
@@ -934,8 +924,6 @@ def single_stock_parameter_search(
     Returns:
         包含所有参数组合结果和最优参数的字典
     """
-    print(f"\n开始对单个股票进行参数搜索: {os.path.basename(file_path)}")
-    print("="*80)
     
     all_results = []
     best_result = None
@@ -950,8 +938,6 @@ def single_stock_parameter_search(
         # 并行处理参数组合
         if max_workers is None:
             max_workers = min(mp.cpu_count(), total_combinations)
-        
-        print(f"使用 {max_workers} 个工作进程并行处理 {total_combinations} 个参数组合")
         
         # 准备参数元组列表
         args_list = [
@@ -975,8 +961,6 @@ def single_stock_parameter_search(
                     param_result_dict = future.result()
                     result = param_result_dict['result']
                     
-                    print(f"[{completed}/{total_combinations}] 完成: k={k}, timing_interval={timing_interval}")
-                    
                     # 检查是否有错误
                     if 'error' in result:
                         print(f"  错误: {result['error']}")
@@ -996,8 +980,6 @@ def single_stock_parameter_search(
                     trade_count = result.get('trade_count', 0)
                     max_drawdown = result.get('max_drawdown', np.nan)
                     prem_edge = result.get('prem_edge', np.nan)
-                    
-                    print(f"  收益率: {return_pct:.2f}%, 交易次数: {trade_count}, 最大回撤: {max_drawdown:.2f}")
                     
                     # 保存结果
                     param_result = {
@@ -1040,7 +1022,6 @@ def single_stock_parameter_search(
         current_combination = 0
         for k, timing_interval in param_combinations:
             current_combination += 1
-            print(f"\n[{current_combination}/{total_combinations}] 测试参数: k={k}, timing_interval={timing_interval}")
             
             # 运行单个文件的回测
             result = process_single_file(
@@ -1072,8 +1053,6 @@ def single_stock_parameter_search(
             max_drawdown = result.get('max_drawdown', np.nan)
             prem_edge = result.get('prem_edge', np.nan)
             
-            print(f"  收益率: {return_pct:.2f}%, 交易次数: {trade_count}, 最大回撤: {max_drawdown:.2f}")
-            
             # 保存结果
             param_result = {
                 'k': k,
@@ -1101,16 +1080,9 @@ def single_stock_parameter_search(
                 }
     
     # 打印最优参数
-    print("\n" + "="*80)
-    print("参数搜索完成！")
-    print("="*80)
     if best_result:
-        print(f"最优参数组合:")
-        print(f"  k: {best_result['k']}")
-        print(f"  timing_interval: {best_result['timing_interval']}")
-        print(f"  收益率: {best_result['param_result']['final_return_pct']:.2f}%")
-        print(f"  交易次数: {best_result['param_result']['trade_count']}")
-        print(f"  最大回撤: {best_result['param_result']['max_drawdown']:.2f}")
+
+        print(f"{file_path} 最优参数组合: k={best_result['k']} timing_interval={best_result['timing_interval']} 收益率={best_result['param_result']['final_return_pct']:.2f}% 交易次数={best_result['param_result']['trade_count']} 最大回撤: {best_result['param_result']['max_drawdown']:.2f}")
         
         # 对最优参数绘制交易图
         if plot_trades and best_result['result'].get('trade_records'):
@@ -1135,7 +1107,6 @@ def single_stock_parameter_search(
         file_name = os.path.basename(file_path).replace('.csv', '')
         save_path = f'single_stock_search_{file_name}.csv'
         results_df.to_csv(save_path, index=False, encoding='utf-8-sig')
-        print(f"\n所有参数组合结果已保存到: {save_path}")
         
         # 保存最优参数摘要
         if best_result:
@@ -1155,7 +1126,6 @@ def single_stock_parameter_search(
                 os.makedirs(base_path)
             summary_path = os.path.join(base_path, f'single_stock_optimal_{file_name}.csv')
             summary_df.to_csv(summary_path, index=False, encoding='utf-8-sig')
-            print(f"最优参数摘要已保存到: {summary_path}")
     
     return {
         'all_results': all_results,
