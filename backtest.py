@@ -15,3 +15,6 @@ if __name__ == '__main__':
 
     import sim_append
     sim_append.main()
+
+    import select_args
+    select_args.main()
